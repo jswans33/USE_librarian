@@ -3,13 +3,63 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QTableView, QLineEdit, QPushButton,
     QComboBox, QLabel, QHeaderView,
-    QSizePolicy, QMessageBox
+    QSizePolicy, QMessageBox, QMenu,
+    QDialog, QTextEdit
 )
 from PySide6.QtCore import Qt, Signal, QSortFilterProxyModel, QSize
-from PySide6.QtGui import QStandardItemModel, QStandardItem
+from PySide6.QtGui import QStandardItemModel, QStandardItem, QCursor
 
 from ..widgets import PanelWidget
 from ...services import DatabaseService, DatabaseEntry
+
+class FileDetailsDialog(QDialog):
+    """Dialog for showing detailed file information."""
+    
+    def __init__(self, entry: DatabaseEntry, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("File Details")
+        self.setMinimumSize(600, 400)
+        
+        layout = QVBoxLayout(self)
+        
+        # Create text display
+        text = QTextEdit()
+        text.setReadOnly(True)
+        
+        # Build details text
+        details = []
+        details.append(f"Name: {entry.name}")
+        details.append(f"Path: {entry.path}")
+        details.append(f"Size: {entry.size}")
+        details.append(f"Created: {entry.created}")
+        details.append(f"Modified: {entry.modified}")
+        details.append(f"Extension: {entry.extension}")
+        
+        if entry.category:
+            details.append(f"\nCategory: {entry.category}")
+        if entry.subcategory:
+            details.append(f"Subcategory: {entry.subcategory}")
+        
+        if entry.tags:
+            details.append("\nTags:")
+            for tag in sorted(entry.tags):
+                details.append(f"  • {tag}")
+        
+        if entry.patterns:
+            details.append("\nPatterns:")
+            for pattern in sorted(entry.patterns):
+                details.append(f"  • {pattern}")
+        
+        if entry.parsed_info:
+            details.append(f"\nParsed Information:\n{entry.parsed_info}")
+        
+        text.setPlainText("\n".join(details))
+        layout.addWidget(text)
+        
+        # Add close button
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        layout.addWidget(close_button)
 
 class FilterBar(QWidget):
     """Widget for filtering table contents."""
@@ -40,6 +90,12 @@ class FilterBar(QWidget):
         self.filter_input.setPlaceholderText("Enter filter text...")
         self.filter_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout.addWidget(self.filter_input)
+        
+        # Quick filters button
+        self.quick_filter_button = QPushButton("Quick Filters")
+        self.quick_filter_button.setToolTip("Show common filters")
+        self.quick_filter_button.clicked.connect(self._show_quick_filters)
+        layout.addWidget(self.quick_filter_button)
         
         # Clear button
         clear_button = QPushButton("Clear")
@@ -75,6 +131,50 @@ class FilterBar(QWidget):
         if column and text:  # Only log non-empty filters
             self.logger.log_action(f"Filter applied: {column}='{text}'")
         self.filter_changed.emit(column, text)
+    
+    def _show_quick_filters(self):
+        """Show quick filters menu."""
+        menu = QMenu(self)
+        
+        # Add category submenu
+        categories = QMenu("Categories", menu)
+        for category in ['document', 'image', 'video', 'audio', 'code', 'data', 'model']:
+            action = categories.addAction(category)
+            action.triggered.connect(
+                lambda checked, c=category: self._apply_filter("Category", c)
+            )
+        menu.addMenu(categories)
+        
+        # Add size submenu
+        sizes = QMenu("Sizes", menu)
+        for size in ['tiny', 'small', 'medium', 'large', 'huge']:
+            action = sizes.addAction(size)
+            action.triggered.connect(
+                lambda checked, s=size: self._apply_filter("Tags", f"size:{s}")
+            )
+        menu.addMenu(sizes)
+        
+        # Add pattern submenu
+        patterns = QMenu("Patterns", menu)
+        common_patterns = [
+            "Date pattern", "Version number", "Sequence number",
+            "Version indicator", "Temporary file", "Test/Demo file",
+            "Data file", "Configuration file"
+        ]
+        for pattern in common_patterns:
+            action = patterns.addAction(pattern)
+            action.triggered.connect(
+                lambda checked, p=pattern: self._apply_filter("Patterns", p)
+            )
+        menu.addMenu(patterns)
+        
+        # Show menu at button
+        menu.popup(QCursor.pos())
+    
+    def _apply_filter(self, column: str, value: str):
+        """Apply a quick filter."""
+        self.column_combo.setCurrentText(column)
+        self.filter_input.setText(value)
 
 class DatabaseTableView(QTableView):
     """Enhanced table view with sorting and filtering."""
@@ -111,6 +211,49 @@ class DatabaseTableView(QTableView):
         
         # Set size policy
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        # Enable context menu
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+    
+    def _show_context_menu(self, position):
+        """Show context menu for selected item."""
+        # Get selected row
+        index = self.indexAt(position)
+        if not index.isValid():
+            return
+        
+        # Create menu
+        menu = QMenu(self)
+        
+        # Add actions
+        view_details = menu.addAction("View Details")
+        view_details.triggered.connect(lambda: self._show_details(index))
+        
+        # Show menu
+        menu.exec_(self.viewport().mapToGlobal(position))
+    
+    def _show_details(self, index):
+        """Show details dialog for selected item."""
+        # Get row data
+        row = index.row()
+        entry = DatabaseEntry(
+            name=self.model().data(self.model().index(row, 0)),
+            path=self.model().data(self.model().index(row, 1)),
+            size=self.model().data(self.model().index(row, 2)),
+            created=self.model().data(self.model().index(row, 3)),
+            modified=self.model().data(self.model().index(row, 4)),
+            extension=self.model().data(self.model().index(row, 5)),
+            category=self.model().data(self.model().index(row, 6)),
+            subcategory=self.model().data(self.model().index(row, 7)),
+            tags=set(self.model().data(self.model().index(row, 8)).split(", ")) if self.model().data(self.model().index(row, 8)) else set(),
+            patterns=set(self.model().data(self.model().index(row, 9)).split(", ")) if self.model().data(self.model().index(row, 9)) else set(),
+            parsed_info=self.model().data(self.model().index(row, 10))
+        )
+        
+        # Show dialog
+        dialog = FileDetailsDialog(entry, self)
+        dialog.exec_()
     
     def set_filter(self, column: str, text: str):
         """Apply filter to table."""
@@ -275,7 +418,7 @@ class DatabasePanel(PanelWidget):
     def on_entries_added(self, entries: list[DatabaseEntry]):
         """Handle new database entries."""
         for entry in entries:
-            self.table_view.source_model.appendRow([
+            row_items = [
                 QStandardItem(str(value))
                 for value in [
                     entry.name,
@@ -283,9 +426,15 @@ class DatabasePanel(PanelWidget):
                     entry.size,
                     entry.created,
                     entry.modified,
-                    entry.extension
+                    entry.extension,
+                    entry.category or "",
+                    entry.subcategory or "",
+                    ", ".join(sorted(entry.tags)) if entry.tags else "",
+                    ", ".join(sorted(entry.patterns)) if entry.patterns else "",
+                    entry.parsed_info or ""
                 ]
-            ])
+            ]
+            self.table_view.source_model.appendRow(row_items)
         
         # Update status
         total_rows = self.table_view.source_model.rowCount()
