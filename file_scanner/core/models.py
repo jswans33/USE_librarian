@@ -1,6 +1,6 @@
 """Core domain models and interfaces."""
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -69,8 +69,13 @@ class ScanOptions:
     """Configuration options for directory scanning."""
     max_depth: Optional[int] = None
     follow_links: bool = False
-    ignore_patterns: List[str] = None
+    ignore_patterns: List[str] = field(default_factory=list)
     include_hidden: bool = True
+
+    def __post_init__(self):
+        """Ensure ignore_patterns is a list."""
+        if self.ignore_patterns is None:
+            self.ignore_patterns = []
 
 # Domain Exceptions
 class ScanError(Exception):
